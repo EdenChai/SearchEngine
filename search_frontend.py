@@ -1,19 +1,29 @@
-from inverted_index_body_colab import InvertedIndex as bodyINV, MultiFileReader
-from flask import Flask, request, jsonify
-from nltk.corpus import stopwords
+import math
 from collections import Counter
 from contextlib import closing
-from nltk.stem.porter import *
+
+import pandas as pd
+from flask import Flask, request, jsonify
+from inverted_index_body_colab import InvertedIndex as bodyINV, MultiFileReader
+from inverted_index_title_colab import InvertedIndex as titleINV, MultiFileReader
+from inverted_index_anchor_colab import InvertedIndex as anchorINV, MultiFileReader
+
 import pickle
-import math
-import nltk
 import re
+import nltk
 
 nltk.download('stopwords')
+
+from nltk.stem.porter import *
+from nltk.corpus import stopwords
+
 TUPLE_SIZE = 6
 TF_MASK = 2 ** 16 - 1
 
-inverted_index = bodyINV.read_index('.', 'index')
+# TODO: file name is index?
+inverted_index_body = bodyINV.read_index('.', 'index')
+inverted_index_title = titleINV.read_index('.', 'title_index')
+inverted_index_anchor = anchorINV.read_index('C:\\Users\Eden\postings_gcp', 'anchor_index')
 
 class MyFlaskApp(Flask):
     def run(self, host=None, port=None, debug=None, **options):
@@ -21,6 +31,7 @@ class MyFlaskApp(Flask):
 
 app = MyFlaskApp(__name__)
 app.config['JSONIFY_PRETTYPRINT_REGULAR'] = False
+
 
 @app.route("/search")
 def search():
@@ -49,17 +60,6 @@ def search():
     # END SOLUTION
     return jsonify(res)
 
-def read_posting_list(inverted, w):
-    with closing(MultiFileReader()) as reader:
-        locs = inverted.posting_locs[w]
-        b = reader.read(locs, inverted.df[w] * TUPLE_SIZE)
-        posting_list = []
-        for i in range(inverted.df[w]):
-            doc_id = int.from_bytes(b[i * TUPLE_SIZE:i * TUPLE_SIZE + 4], 'big')
-            tf = int.from_bytes(b[i * TUPLE_SIZE + 4:(i + 1) * TUPLE_SIZE], 'big')
-            posting_list.append((doc_id, tf))
-        return posting_list
-
 
 @app.route("/search_body")
 def search_body():
@@ -82,11 +82,11 @@ def search_body():
     if len(query) == 0:
         return jsonify(res)
 
+    # BEGIN SOLUTION
     tokenized_query = token_query(query)
     if len(tokenized_query) == 0:
         return jsonify(res)
 
-    # BEGIN SOLUTION
     word_weight_in_query = {}
     cosinesim = {}
     word_appearance_in_query = Counter(tokenized_query)
@@ -98,25 +98,28 @@ def search_body():
     for word in word_appearance_in_query:
         weight = word_weight_in_query[word]
         product_for_bottom_from_query += math.pow(weight, 2)
-        idf = inverted_index.get_idf(word)
-        word_posting_lst = read_posting_list(inverted_index, word)
-        for tup in word_posting_lst:
-            if tup[0] not in cosinesim:
-                cosinesim[tup[0]] = (tup[1] / inverted_index.get_doc_len(tup[0])) * idf * weight
-            else:
-                cosinesim[tup[0]] += (tup[1] / inverted_index.get_doc_len(tup[0])) * idf * weight
+        idf = inverted_index_body.idf[word]
+        word_posting_lst = read_posting_list(inverted_index_body, word)
+        if len(word_posting_lst) > 0:
+            for tup in word_posting_lst:
+                if tup[0] not in cosinesim:
+                    cosinesim[tup[0]] = (tup[1] / inverted_index_body.docLen[tup[0]]) * idf * weight
+                else:
+                    cosinesim[tup[0]] += (tup[1] / inverted_index_body.docLen[tup[0]]) * idf * weight
 
+    if len(cosinesim) < 1:
+        return jsonify(res)
     # calc the bottom product for cosinesim
     for doc_id in cosinesim:
-        dominator = math.sqrt(inverted_index.tfidf_dom[doc_id] * product_for_bottom_from_query)
+        dominator = math.sqrt(inverted_index_body.tfidf_dom[doc_id] * product_for_bottom_from_query)
         cosinesim[doc_id] = cosinesim[doc_id] / dominator
 
-    sorted_cosinesim = {k: v for k, v in sorted(cosinesim.items(), key=lambda item: item[1], reverse=True)}
+    sorted_cosinesim = { k: v for k, v in sorted(cosinesim.items(), key=lambda item: item[1], reverse=True) }
     i = 0
     for doc in sorted_cosinesim:
         if i >= 100:
             break
-        res.append((doc, inverted_index.get_title_by_doc(doc)))
+        res.append((doc, inverted_index_body.docTitle[doc]))
         i += 1
         # END SOLUTION
     return jsonify(res)
@@ -140,40 +143,35 @@ def search_title():
     --------
         list of ALL (not just top 100) search results, ordered from best to
         worst where each element is a tuple (wiki_id, title).
-
-        titles->
-
-        doc1:"Ayelets house"
-        doc2:"Natashas house"
-        doc3:"Tslils dog"
-
-        Inverted->
-
-        Ayelet:1
-        Natasha:2
-        Tslil:3
-        house:1,2
-        dog:3
-
-        query : "house dog"
-
-        result :
-        key:doc_id  value:number of times one of the query words in the doc
-        doc1:          1
-        doc2:          1
-        doc3:          1
-
-
-
-
-
     """
-
     res = []
     query = request.args.get('query', '')
     if len(query) == 0:
         return jsonify(res)
+
     # BEGIN SOLUTION
+    tokenized_query = token_query(query)
+    if len(tokenized_query) == 0:
+        return jsonify(res)
+
+    # collecting docs that query's words appear in
+    query_binary_similarity = {}
+    for word in tokenized_query:
+        posting_lst = read_posting_list(inverted_index_title, word)
+        if len(posting_lst) > 0:
+            for doc in posting_lst:
+                if doc[0] in query_binary_similarity:
+                    query_binary_similarity[doc[0]] += 1
+                else:
+                    query_binary_similarity[doc[0]] = 1
+
+    if len(query_binary_similarity) == 0:
+        return jsonify(res)
+
+    sorted_query_similarity = {k: v for k, v in
+                               sorted(query_binary_similarity.items(), key=lambda item: item[1], reverse=True)}
+    for key in sorted_query_similarity:
+        res.append((key, inverted_index_title.doc_to_title[key]))
 
     # END SOLUTION
     return jsonify(res)
@@ -203,8 +201,30 @@ def search_anchor():
     query = request.args.get('query', '')
     if len(query) == 0:
         return jsonify(res)
-    # BEGIN SOLUTION
     
+    # BEGIN SOLUTION
+    tokenized_query = token_query(query)
+    if len(tokenized_query) == 0:
+        return jsonify(res)
+    
+    query_binary_similarity = {}
+    for word in tokenized_query:
+        posting_lst = read_posting_list(inverted_index_anchor, word)
+        if len(posting_lst) > 0:
+            for doc in posting_lst:
+                if doc[0] in query_binary_similarity:
+                    query_binary_similarity[doc[0]] += 1
+                else:
+                    query_binary_similarity[doc[0]] = 1
+
+    if len(query_binary_similarity) == 0:
+        return jsonify(res)
+
+    sorted_query_similarity = {k: v for k, v in sorted(query_binary_similarity.items(), key=lambda item: item[1], reverse=True)}
+    print(sorted_query_similarity)
+    for key in sorted_query_similarity:
+        # if key in inverted_index_anchor.doc_to_title:
+        res.append((key, inverted_index_anchor.doc_to_title[key]))
     # END SOLUTION
     return jsonify(res)
 
@@ -229,9 +249,22 @@ def get_pagerank():
     wiki_ids = request.get_json()
     if len(wiki_ids) == 0:
         return jsonify(res)
-    # BEGIN SOLUTION
 
+    # BEGIN SOLUTION
+    if len(wiki_ids) == 0:
+        return jsonify(res)
+
+    ranks = pd.read_csv('page_rank.csv')
+    ranks.columns = ['doc_id', 'rank']
+
+    for i in range(len(wiki_ids)):
+        x = ranks.loc[ranks['doc_id'] == wiki_ids[i]]
+        dff = pd.DataFrame(x)
+        y = x['rank'].values
+        if len(y) != 0:
+            res.append(y[0])
     # END SOLUTION
+    
     return jsonify(res)
 
 
@@ -263,8 +296,9 @@ def get_pageview():
     return jsonify(res)
 
 
-""" ------------------------------ Helper Function ------------------------------ """
-def tokenization(query):
+""" ------------------------------ Helper Functions ------------------------------ """
+
+def token_query(query):
     english_stopwords = frozenset(stopwords.words('english'))
     corpus_stopwords = ['category', 'references', 'also', 'links', 'extenal', 'see', 'thumb']
     RE_WORD = re.compile(r"""[\#\@\w](['\-]?\w){2,24}""", re.UNICODE)
@@ -273,6 +307,18 @@ def tokenization(query):
     filteredQ = [tok for tok in tokensQ if tok not in all_stopwords]
     return filteredQ
 
+def read_posting_list(inverted, w):
+    with closing(MultiFileReader()) as reader:
+        locs = inverted.posting_locs[w]
+        posting_list = []
+        if len(locs) > 0:
+            b = reader.read(locs, inverted.df[w] * TUPLE_SIZE)
+            for i in range(inverted.df[w]):
+                doc_id = int.from_bytes(b[i * TUPLE_SIZE:i * TUPLE_SIZE + 4], 'big')
+                tf = int.from_bytes(b[i * TUPLE_SIZE + 4:(i + 1) * TUPLE_SIZE], 'big')
+                posting_list.append((doc_id, tf))
+        return posting_list
+    
 if __name__ == '__main__':
     # run the Flask RESTful API, make the server publicly available (host='0.0.0.0') on port 8080
     app.run(host='localhost', port=8080, debug=True)
