@@ -1,22 +1,14 @@
-import pyspark
-import sys
-from collections import Counter, OrderedDict
 import itertools
-from itertools import islice, count, groupby
-import pandas as pd
-import os
-import re
-from operator import itemgetter
-from time import time
-from pathlib import Path
 import pickle
-from google.cloud import storage
-from collections import defaultdict
+from collections import Counter, defaultdict
 from contextlib import closing
+from pathlib import Path
 
-# Let's start with a small block size of 30 bytes just to test things out.
+from google.cloud import storage
+
 BLOCK_SIZE = 1999998
-
+TUPLE_SIZE = 6          # We're going to pack the doc_id and tf values in this many bytes.
+TF_MASK = 2 ** 16 - 1   # Masking the 16 low bits of an integer
 
 class MultiFileWriter:
     """ Sequential binary writer to multiple files of up to BLOCK_SIZE each. """
@@ -55,7 +47,7 @@ class MultiFileWriter:
             The function saves the posting files into the right bucket in google storage.
         """
         file_name = self._f.name
-        blob = self.bucket.blob(f"postings_gcp/{file_name}")
+        blob = self.bucket.blob(f"title_index/{file_name}")
         blob.upload_from_filename(file_name)
 
 
@@ -86,14 +78,6 @@ class MultiFileReader:
         return False
 
 
-from collections import defaultdict
-from contextlib import closing
-
-TUPLE_SIZE = 6  # We're going to pack the doc_id and tf values in this
-# many bytes.
-TF_MASK = 2 ** 16 - 1  # Masking the 16 low bits of an integer
-
-
 class InvertedIndex:
     def __init__(self, docs={}):
         """ Initializes the inverted index and add documents to it (if provided).
@@ -101,11 +85,11 @@ class InvertedIndex:
         -----------
           docs: dict mapping doc_id to list of tokens
         """
-        self.doc_to_title = defaultdict(list)  # dictionary for {doc_id:title, ...}
-        self.df = Counter()  # stores document frequency per term
-        self.term_total = Counter()  # stores total frequency per term
-        self._posting_list = defaultdict(list)  # stores posting list per term while building the index (internally), otherwise too big to store in memory.
-        self.posting_locs = defaultdict(list)  # mapping a term to posting file locations, which is a list of (file_name, offset) pairs.
+        self.df = Counter()                         # stores document frequency per term
+        self.doc_title_mapping = defaultdict(list)  # dictionary for {doc_id:title, ...}
+        self.term_total = Counter()                 # stores total frequency per term
+        self._posting_list = defaultdict(list)      # stores posting list per term while building the index (internally), otherwise too big to store in memory.
+        self.posting_locs = defaultdict(list)       # mapping a term to posting file locations, which is a list of (file_name, offset) pairs.
 
         for doc_id, tokens in docs.items():
             self.add_doc(doc_id, tokens)
@@ -190,10 +174,5 @@ class InvertedIndex:
             pickle.dump(posting_locs, f)
         client = storage.Client()
         bucket = client.bucket(bucket_name)
-        blob_posting_locs = bucket.blob(f"postings_gcp/{bucket_id}_posting_locs.pickle")
+        blob_posting_locs = bucket.blob(f"title_index/{bucket_id}_posting_locs.pickle")
         blob_posting_locs.upload_from_filename(f"{bucket_id}_posting_locs.pickle")
-
-    def get_title_by_doc(self, doc_id):
-        if doc_id in self.doc_to_title:
-            return self.doc_to_title[doc_id]
-        return None

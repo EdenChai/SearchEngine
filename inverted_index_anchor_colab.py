@@ -1,15 +1,12 @@
-import sys
-from collections import Counter, OrderedDict, defaultdict
 import itertools
-from itertools import islice, count, groupby
-import os
-import re
-from operator import itemgetter
-from pathlib import Path
 import pickle
+from collections import Counter, defaultdict
 from contextlib import closing
+from pathlib import Path
 
 BLOCK_SIZE = 1999998
+TUPLE_SIZE = 6          # We're going to pack the doc_id and tf values in this many bytes.
+TF_MASK = 2 ** 16 - 1   # Masking the 16 low bits of an integer
 
 class MultiFileWriter:
     """ Sequential binary writer to multiple files of up to BLOCK_SIZE each. """
@@ -38,6 +35,7 @@ class MultiFileWriter:
     def close(self):
         self._f.close()
 
+
 class MultiFileReader:
     """ Sequential binary reader of multiple files of up to BLOCK_SIZE each. """
     
@@ -48,7 +46,7 @@ class MultiFileReader:
         b = []
         for f_name, offset in locs:
             if f_name not in self._open_files:
-                self._open_files[f_name] = open(Path('C:\\Users\Eden\postings_gcp') / f'{f_name}', 'rb')
+                self._open_files[f_name] = open(f_name, 'rb')
                 # self._open_files[f_name] = open(f_name, 'rb')
             f = self._open_files[f_name]
             f.seek(offset)
@@ -65,8 +63,6 @@ class MultiFileReader:
         self.close()
         return False
 
-TUPLE_SIZE = 6  # We're going to pack the doc_id and tf values in this many bytes.
-TF_MASK = 2 ** 16 - 1  # Masking the 16 low bits of an integer
 
 class InvertedIndex:
     def __init__(self, docs={ }):
@@ -75,11 +71,11 @@ class InvertedIndex:
         -----------
           docs: dict mapping doc_id to list of tokens
         """
-        self.doc_to_title = defaultdict(list)  # dictionary for {doc_id:title, ...}
-        self.df = Counter()  # stores document frequency per term
-        self.term_total = Counter()  # stores total frequency per term
-        self._posting_list = defaultdict(list)  # stores posting list per term while building the index (internally), otherwise too big to store in memory.
-        self.posting_locs = defaultdict(list)  # mapping a term to posting file locations, which is a list of (file_name, offset) pairs.
+        self.df = Counter()                         # stores document frequency per term
+        self.doc_title_mapping = defaultdict(list)  # dictionary for {doc_id:title, ...}
+        self.term_total = Counter()                 # stores total frequency per term
+        self._posting_list = defaultdict(list)      # stores posting list per term while building the index (internally), otherwise too big to store in memory.
+        self.posting_locs = defaultdict(list)       # mapping a term to posting file locations, which is a list of (file_name, offset) pairs.
         
         for doc_id, tokens in docs.items():
             self.add_doc(doc_id, tokens)
@@ -166,8 +162,3 @@ class InvertedIndex:
                 # save file locations to index
                 posting_locs[w].extend(locs)
         return posting_locs
-    
-    def get_title_by_doc(self, doc_id):
-        if doc_id in self.doc_to_title:
-            return self.doc_to_title[doc_id]
-        return None

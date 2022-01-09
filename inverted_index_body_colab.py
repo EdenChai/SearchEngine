@@ -1,13 +1,8 @@
-import sys
-from collections import Counter, OrderedDict, defaultdict
 import itertools
-from itertools import islice, count, groupby
-import os
-import re
-from operator import itemgetter
-from pathlib import Path
 import pickle
+from collections import Counter, defaultdict
 from contextlib import closing
+from pathlib import Path
 
 BLOCK_SIZE = 1999998
 
@@ -41,6 +36,7 @@ class MultiFileWriter:
 
 class MultiFileReader:
     """ Sequential binary reader of multiple files of up to BLOCK_SIZE each. """
+    
     def __init__(self):
         self._open_files = {}
 
@@ -74,12 +70,11 @@ class InvertedIndex:
         -----------
           docs: dict mapping doc_id to list of tokens
         """
-        self.docLen = defaultdict(list)             # dictionary for documents length {doc_id:len, ...}
+        self.df = defaultdict(list)                 # stores document frequency per term
         self.idf = defaultdict(list)                # dictionary for idf {word:idf, ...}
-        self.docTitle = defaultdict(list)           # dictionary for {doc_id:title, ...}
-        self.tfidf_dominator = defaultdict(list)    # dictionary for total tfidf {word:[(doc_id,tfidf), ...], ...}
-        self.df = Counter()                         # stores document frequency per term
-        self.term_total = Counter()                 # stores total frequency per term
+        self.doc_len_mapping = defaultdict(list)    # dictionary for documents length {doc_id:len, ...}
+        self.doc_title_mapping = defaultdict(list)  # dictionary for {doc_id:title, ...}
+        self.term_total = defaultdict(list)         # stores total frequency per term
         self._posting_list = defaultdict(list)      # stores posting list per term while building the index (internally), otherwise too big to store in memory.
         self.posting_locs = defaultdict(list)       # mapping a term to posting file locations, which is a list of (file_name, offset) pairs.
 
@@ -169,24 +164,3 @@ class InvertedIndex:
                 # save file locations to index
                 posting_locs[w].extend(locs)
         return posting_locs
-
-    def get_idf(self, word):
-        if word in self.idf:
-            return self.idf[word]
-        return 0
-
-    def get_doc_len(self, doc_id):
-        if doc_id in self.docLen:
-            return self.docLen[doc_id]
-        else:
-            return 0
-
-    def get_dominator(self, doc_id):
-        if doc_id in self.tfidf_dominator:
-            return self.tfidf_dominator[doc_id]
-        return None
-
-    def get_title_by_doc(self, doc_id):
-        if doc_id in self.docTitle:
-            return self.docTitle[doc_id]
-        return None

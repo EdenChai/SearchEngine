@@ -2,15 +2,15 @@ import math
 from collections import Counter
 from contextlib import closing
 
+import nltk
 import pandas as pd
 from flask import Flask, request, jsonify
-from inverted_index_body_colab import InvertedIndex as bodyINV, MultiFileReader
-from inverted_index_title_colab import InvertedIndex as titleINV, MultiFileReader
-from inverted_index_anchor_colab import InvertedIndex as anchorINV, MultiFileReader
 
-import pickle
-import re
-import nltk
+from BM25 import BM25
+from inverted_index_anchor_colab import InvertedIndex as anchorINV
+from inverted_index_body_colab import InvertedIndex as bodyINV
+from inverted_index_title_colab import InvertedIndex as titleINV
+from Reader import MultiFileReader
 
 nltk.download('stopwords')
 
@@ -20,11 +20,18 @@ from nltk.corpus import stopwords
 TUPLE_SIZE = 6
 TF_MASK = 2 ** 16 - 1
 
-# TODO: file name is index?
-inverted_index_body = bodyINV.read_index('.', 'index')
-inverted_index_title = titleINV.read_index('.', 'title_index')
-inverted_index_anchor = anchorINV.read_index('C:\\Users\Eden\postings_gcp', 'anchor_index')
+# Paths
+body_path = './body_index/'
+title_path = './title_index/'
+anchor_path = './anchor_index/'
+pagerank_path = './pagerank/'
+pageview_path = './pageview'
 
+# Create inverted index instance
+inverted_index_body = bodyINV.read_index(body_path, 'body_index')
+inverted_index_title = titleINV.read_index(title_path, 'title_index')
+inverted_index_anchor = anchorINV.read_index(anchor_path, 'anchor_index')
+page_view = bodyINV.read_index(pageview_path, 'page_view')
 class MyFlaskApp(Flask):
     def run(self, host=None, port=None, debug=None, **options):
         super(MyFlaskApp, self).run(host=host, port=port, debug=debug, **options)
@@ -32,6 +39,9 @@ class MyFlaskApp(Flask):
 app = MyFlaskApp(__name__)
 app.config['JSONIFY_PRETTYPRINT_REGULAR'] = False
 
+@app.route("/")
+def home_page():
+    return jsonify("Welcome to Wikipedia Search Engine! creators : Eden Chai, Tslil Brami ")
 
 @app.route("/search")
 def search():
@@ -51,11 +61,30 @@ def search():
         list of up to 100 search results, ordered from best to worst where each
         element is a tuple (wiki_id, title).
     """
+    # calc using BM25
     res = []
     query = request.args.get('query', '')
     if len(query) == 0:
         return jsonify(res)
+    
     # BEGIN SOLUTION
+    
+    # tokenize and filter the stopwords from the original queries.
+    tokenized_query = token_query(query)
+    if len(query) == 0:
+        return jsonify(res)
+    
+    # candidates = get_candidates(inverted_index_body, body_path, tokenized_query)
+    bm25 = BM25(inverted_index_body, body_path, tokenized_query)
+    scores = bm25.calc_candidates_score()
+    sorted_scores = {k: v for k, v in sorted(scores.items(), key=lambda item: item[1], reverse=True)}
+
+    i = 0
+    for doc_id in sorted_scores:
+        if i >= 100:
+            break
+        res.append((doc_id, inverted_index_body.doc_title_mapping[doc_id]))
+        i += 1
 
     # END SOLUTION
     return jsonify(res)
@@ -89,37 +118,41 @@ def search_body():
 
     word_weight_in_query = {}
     cosinesim = {}
-    word_appearance_in_query = Counter(tokenized_query)
-    for word in word_appearance_in_query:
-        word_weight_in_query[word] = word_appearance_in_query[word] / len(tokenized_query)
+    word_weight_in_q = Counter(tokenized_query)
+    for word in word_weight_in_q:
+        word_weight_in_query[word] = word_weight_in_q[word] / len(tokenized_query)
 
-    # calc the upper product for cosinesim using tf idf
+    # calc cosine similarity by the algorithm on lecture 3
+    # upper product calculation
     product_for_bottom_from_query = 0
-    for word in word_appearance_in_query:
+    for word in word_weight_in_q:
         weight = word_weight_in_query[word]
         product_for_bottom_from_query += math.pow(weight, 2)
+        if word not in inverted_index_body.idf:
+            continue
         idf = inverted_index_body.idf[word]
-        word_posting_lst = read_posting_list(inverted_index_body, word)
+        word_posting_lst = read_posting_list(inverted_index_body, body_path, word)
         if len(word_posting_lst) > 0:
             for tup in word_posting_lst:
                 if tup[0] not in cosinesim:
-                    cosinesim[tup[0]] = (tup[1] / inverted_index_body.docLen[tup[0]]) * idf * weight
+                    cosinesim[tup[0]] = (tup[1] / inverted_index_body.doc_len_mapping[tup[0]]) * idf * weight
                 else:
-                    cosinesim[tup[0]] += (tup[1] / inverted_index_body.docLen[tup[0]]) * idf * weight
+                    cosinesim[tup[0]] += (tup[1] / inverted_index_body.doc_len_mapping[tup[0]]) * idf * weight
 
     if len(cosinesim) < 1:
         return jsonify(res)
+    
     # calc the bottom product for cosinesim
     for doc_id in cosinesim:
-        dominator = math.sqrt(inverted_index_body.tfidf_dom[doc_id] * product_for_bottom_from_query)
-        cosinesim[doc_id] = cosinesim[doc_id] / dominator
+        cosinesim[doc_id] = cosinesim[doc_id] * (1 / len(tokenized_query)) * (
+                1 / inverted_index_body.doc_len_mapping[doc_id])
 
     sorted_cosinesim = { k: v for k, v in sorted(cosinesim.items(), key=lambda item: item[1], reverse=True) }
     i = 0
     for doc in sorted_cosinesim:
         if i >= 100:
             break
-        res.append((doc, inverted_index_body.docTitle[doc]))
+        res.append((doc, inverted_index_body.doc_title_mapping[doc]))
         i += 1
         # END SOLUTION
     return jsonify(res)
@@ -157,7 +190,7 @@ def search_title():
     # collecting docs that query's words appear in
     query_binary_similarity = {}
     for word in tokenized_query:
-        posting_lst = read_posting_list(inverted_index_title, word)
+        posting_lst = read_posting_list(inverted_index_title, title_path, word)
         if len(posting_lst) > 0:
             for doc in posting_lst:
                 if doc[0] in query_binary_similarity:
@@ -168,10 +201,10 @@ def search_title():
     if len(query_binary_similarity) == 0:
         return jsonify(res)
 
-    sorted_query_similarity = {k: v for k, v in
-                               sorted(query_binary_similarity.items(), key=lambda item: item[1], reverse=True)}
+    sorted_query_similarity = {k: v for k, v in sorted(query_binary_similarity.items(), key=lambda x: x[1], reverse=True)}
     for key in sorted_query_similarity:
-        res.append((key, inverted_index_title.doc_to_title[key]))
+        if key in inverted_index_title.doc_title_mapping:
+            res.append((key, inverted_index_title.doc_title_mapping[key]))
 
     # END SOLUTION
     return jsonify(res)
@@ -209,7 +242,7 @@ def search_anchor():
     
     query_binary_similarity = {}
     for word in tokenized_query:
-        posting_lst = read_posting_list(inverted_index_anchor, word)
+        posting_lst = read_posting_list(inverted_index_anchor, anchor_path, word)
         if len(posting_lst) > 0:
             for doc in posting_lst:
                 if doc[0] in query_binary_similarity:
@@ -221,10 +254,9 @@ def search_anchor():
         return jsonify(res)
 
     sorted_query_similarity = {k: v for k, v in sorted(query_binary_similarity.items(), key=lambda item: item[1], reverse=True)}
-    print(sorted_query_similarity)
     for key in sorted_query_similarity:
-        # if key in inverted_index_anchor.doc_to_title:
-        res.append((key, inverted_index_anchor.doc_to_title[key]))
+        if key in inverted_index_anchor.doc_title_mapping:
+            res.append((key, inverted_index_anchor.doc_title_mapping[key]))
     # END SOLUTION
     return jsonify(res)
 
@@ -254,17 +286,14 @@ def get_pagerank():
     if len(wiki_ids) == 0:
         return jsonify(res)
 
-    ranks = pd.read_csv('page_rank.csv')
-    ranks.columns = ['doc_id', 'rank']
+    ranks = pd.read_csv(pagerank_path + 'pagerank.csv', index_col=0, header=None, squeeze=True)
+    ranks_dict = ranks.to_dict()
 
     for i in range(len(wiki_ids)):
-        x = ranks.loc[ranks['doc_id'] == wiki_ids[i]]
-        dff = pd.DataFrame(x)
-        y = x['rank'].values
-        if len(y) != 0:
-            res.append(y[0])
+        if wiki_ids[i] in ranks_dict:
+            res.append(ranks_dict[wiki_ids[i]])
     # END SOLUTION
-    
+
     return jsonify(res)
 
 
@@ -290,11 +319,15 @@ def get_pageview():
     wiki_ids = request.get_json()
     if len(wiki_ids) == 0:
         return jsonify(res)
+    
     # BEGIN SOLUTION
+    page_view_dictionary = page_view
+    for i in range(len(wiki_ids)):
+        if wiki_ids[i] in page_view_dictionary:
+            res.append(page_view_dictionary[wiki_ids[i]])
 
     # END SOLUTION
     return jsonify(res)
-
 
 """ ------------------------------ Helper Functions ------------------------------ """
 
@@ -307,8 +340,8 @@ def token_query(query):
     filteredQ = [tok for tok in tokensQ if tok not in all_stopwords]
     return filteredQ
 
-def read_posting_list(inverted, w):
-    with closing(MultiFileReader()) as reader:
+def read_posting_list(inverted, path, w):
+    with closing(MultiFileReader(path)) as reader:
         locs = inverted.posting_locs[w]
         posting_list = []
         if len(locs) > 0:
@@ -321,4 +354,4 @@ def read_posting_list(inverted, w):
     
 if __name__ == '__main__':
     # run the Flask RESTful API, make the server publicly available (host='0.0.0.0') on port 8080
-    app.run(host='localhost', port=8080, debug=True)
+    app.run(host='35.202.162.205', port=8080, debug=True)
