@@ -24,14 +24,17 @@ TF_MASK = 2 ** 16 - 1
 body_path = './body_index/'
 title_path = './title_index/'
 anchor_path = './anchor_index/'
-pagerank_path = './pagerank/'
-pageview_path = './pageview'
+page_rank_path = './pagerank/'
+page_view_path = './pageview'
 
 # Create inverted index instance
 inverted_index_body = bodyINV.read_index(body_path, 'body_index')
 inverted_index_title = titleINV.read_index(title_path, 'title_index')
 inverted_index_anchor = anchorINV.read_index(anchor_path, 'anchor_index')
-page_view = bodyINV.read_index(pageview_path, 'page_view')
+page_rank = pd.read_csv(page_rank_path + 'pagerank.csv', index_col=0, header=None, squeeze=True)
+page_view = bodyINV.read_index(page_view_path, 'pageview')
+
+
 class MyFlaskApp(Flask):
     def run(self, host=None, port=None, debug=None, **options):
         super(MyFlaskApp, self).run(host=host, port=port, debug=debug, **options)
@@ -68,28 +71,31 @@ def search():
         return jsonify(res)
     
     # BEGIN SOLUTION
-    
-    # tokenize and filter the stopwords from the original queries.
     tokenized_query = token_query(query)
     if len(query) == 0:
         return jsonify(res)
     
-    # candidates = get_candidates(inverted_index_body, body_path, tokenized_query)
-    bm25 = BM25(inverted_index_body, body_path, tokenized_query)
-    scores = bm25.calc_candidates_score()
-    sorted_scores = {k: v for k, v in sorted(scores.items(), key=lambda item: item[1], reverse=True)}
+    body_bm25 = BM25(inverted_index_body, body_path, tokenized_query)
+    body_scores = body_bm25.calc_candidates_score()
 
+    title_bm25 = BM25(inverted_index_title, title_path, tokenized_query)
+    title_scores = title_bm25.calc_candidates_score()
+    
+    anchor_bm25 = BM25(inverted_index_anchor, anchor_path, tokenized_query)
+    anchor_scores = anchor_bm25.calc_candidates_score()
+    
+    final_scores = merge_results(body_scores, title_scores, anchor_scores)
+    
     i = 0
-    for doc_id in sorted_scores:
+    for doc_id in final_scores:
         if i >= 100:
             break
-        res.append((doc_id, inverted_index_body.doc_title_mapping[doc_id]))
+        if doc_id in inverted_index_body.doc_title_mapping:
+            res.append((doc_id, inverted_index_body.doc_title_mapping[doc_id]))
         i += 1
 
-    # END SOLUTION
     return jsonify(res)
-
-
+    
 @app.route("/search_body")
 def search_body():
     """ Returns up to a 100 search results for the query using TFIDF AND COSINE
@@ -111,13 +117,13 @@ def search_body():
     if len(query) == 0:
         return jsonify(res)
 
-    # BEGIN SOLUTION
     tokenized_query = token_query(query)
     if len(tokenized_query) == 0:
         return jsonify(res)
 
-    word_weight_in_query = {}
-    cosinesim = {}
+    # BEGIN SOLUTION
+    word_weight_in_query = { }
+    cosinesim = { }
     word_weight_in_q = Counter(tokenized_query)
     for word in word_weight_in_q:
         word_weight_in_query[word] = word_weight_in_q[word] / len(tokenized_query)
@@ -144,8 +150,8 @@ def search_body():
     
     # calc the bottom product for cosinesim
     for doc_id in cosinesim:
-        cosinesim[doc_id] = cosinesim[doc_id] * (1 / len(tokenized_query)) * (
-                1 / inverted_index_body.doc_len_mapping[doc_id])
+        dominator = math.sqrt(inverted_index_body.dominator_mapping[doc_id] * product_for_bottom_from_query)
+        cosinesim[doc_id] = cosinesim[doc_id] / dominator
 
     sorted_cosinesim = { k: v for k, v in sorted(cosinesim.items(), key=lambda item: item[1], reverse=True) }
     i = 0
@@ -154,9 +160,8 @@ def search_body():
             break
         res.append((doc, inverted_index_body.doc_title_mapping[doc]))
         i += 1
-        # END SOLUTION
-    return jsonify(res)
 
+    return jsonify(res)
 
 @app.route("/search_title")
 def search_title():
@@ -283,17 +288,16 @@ def get_pagerank():
         return jsonify(res)
 
     # BEGIN SOLUTION
-    if len(wiki_ids) == 0:
-        return jsonify(res)
-
-    ranks = pd.read_csv(pagerank_path + 'pagerank.csv', index_col=0, header=None, squeeze=True)
-    ranks_dict = ranks.to_dict()
-
-    for i in range(len(wiki_ids)):
-        if wiki_ids[i] in ranks_dict:
-            res.append(ranks_dict[wiki_ids[i]])
+    page_rank_dictionary = page_rank.to_dict()
+    notExist = 0
+    
+    for page_id in wiki_ids:
+        if page_id in page_rank_dictionary:
+            res.append(page_rank_dictionary[page_id])
+        else:
+            res.append(notExist)
     # END SOLUTION
-
+    
     return jsonify(res)
 
 
@@ -322,18 +326,23 @@ def get_pageview():
     
     # BEGIN SOLUTION
     page_view_dictionary = page_view
-    for i in range(len(wiki_ids)):
-        if wiki_ids[i] in page_view_dictionary:
-            res.append(page_view_dictionary[wiki_ids[i]])
-
+    notExist = 0
+    for page in wiki_ids:
+        if page in page_view_dictionary:
+            res.append(page_view_dictionary[page])
+        else:
+            res.append(notExist)
     # END SOLUTION
+    
     return jsonify(res)
 
-""" ------------------------------ Helper Functions ------------------------------ """
+""" ------------------------------ Auxiliary functions ------------------------------ """
 
 def token_query(query):
     english_stopwords = frozenset(stopwords.words('english'))
-    corpus_stopwords = ['category', 'references', 'also', 'links', 'extenal', 'see', 'thumb']
+    corpus_stopwords = ["category", "references", "also", "external", "links", "may", "first",
+                        "see", "history", "people", "one", "two", "part", "thumb", "including",
+                        "second", "following", "many", "however", "would", "became"]
     RE_WORD = re.compile(r"""[\#\@\w](['\-]?\w){2,24}""", re.UNICODE)
     all_stopwords = english_stopwords.union(corpus_stopwords)
     tokensQ = [token.group() for token in RE_WORD.finditer(query.lower())]
@@ -351,7 +360,37 @@ def read_posting_list(inverted, path, w):
                 tf = int.from_bytes(b[i * TUPLE_SIZE + 4:(i + 1) * TUPLE_SIZE], 'big')
                 posting_list.append((doc_id, tf))
         return posting_list
+
+def merge_results(body_scores, title_scores, anchor_scores, body_weight=1/3, title_weight=1/3, anchor_weight=1/3):
+    res = {}
     
+    # body score
+    for doc_id, score in body_scores.items():
+        if doc_id in res:
+            res[doc_id] += score * body_weight
+        else:
+            res[doc_id] = score * body_weight
+    
+    # title score
+    for doc_id, score in title_scores.items():
+        if doc_id in res:
+            res[doc_id] += score * title_weight
+        else:
+            res[doc_id] = score * title_weight
+            
+    # anchor score
+    for doc_id, score in anchor_scores.items():
+        if doc_id in res:
+            res[doc_id] += score * anchor_weight
+        else:
+            res[doc_id] = score * anchor_weight
+
+    sorted_scores = {k: v for k, v in sorted(res.items(), key=lambda item: item[1], reverse=True)}
+    return sorted_scores
+    
+
+""" ----------------------------------- Main ----------------------------------- """
+
 if __name__ == '__main__':
     # run the Flask RESTful API, make the server publicly available (host='0.0.0.0') on port 8080
-    app.run(host='35.202.162.205', port=8080, debug=True)
+    app.run(host='0.0.0.0', port=8080, debug=False)

@@ -53,6 +53,7 @@ class MultiFileWriter:
 
 class MultiFileReader:
     """ Sequential binary reader of multiple files of up to BLOCK_SIZE each. """
+
     def __init__(self):
         self._open_files = {}
     
@@ -84,6 +85,7 @@ class InvertedIndex:
         -----------
           docs: dict mapping doc_id to list of tokens
         """
+        self.dominator_mapping = Counter()
         self.df = defaultdict(list)                 # stores document frequency per term
         self.idf = defaultdict(list)                # dictionary for idf {word:idf, ...}
         self.doc_len_mapping = defaultdict(list)    # dictionary for documents length {doc_id:len, ...}
@@ -91,6 +93,7 @@ class InvertedIndex:
         self.term_total = defaultdict(list)         # stores total frequency per term
         self._posting_list = defaultdict(list)      # stores posting list per term while building the index (internally), otherwise too big to store in memory.
         self.posting_locs = defaultdict(list)       # mapping a term to posting file locations, which is a list of (file_name, offset) pairs.
+        
         
         for doc_id, tokens in docs.items():
             self.add_doc(doc_id, tokens)

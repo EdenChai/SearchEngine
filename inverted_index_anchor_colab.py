@@ -14,7 +14,8 @@ class MultiFileWriter:
     def __init__(self, base_dir, name):
         self._base_dir = Path(base_dir)
         self._name = name
-        self._file_gen = (open(self._base_dir / f'{name}_{i:03}.bin', 'wb') for i in itertools.count())
+        self._file_gen = (open(self._base_dir / f'{name}_{i:03}.bin', 'wb')
+                          for i in itertools.count())
         self._f = next(self._file_gen)
     
     def write(self, b):
@@ -47,7 +48,6 @@ class MultiFileReader:
         for f_name, offset in locs:
             if f_name not in self._open_files:
                 self._open_files[f_name] = open(f_name, 'rb')
-                # self._open_files[f_name] = open(f_name, 'rb')
             f = self._open_files[f_name]
             f.seek(offset)
             n_read = min(n_bytes, BLOCK_SIZE - offset)
@@ -156,7 +156,8 @@ class InvertedIndex:
         with closing(MultiFileWriter('.', bucket)) as writer:
             for w, pl in list_w_pl:
                 # convert to bytes
-                b = b''.join([(doc_id << 16 | (tf & TF_MASK)).to_bytes(TUPLE_SIZE, 'big') for doc_id, tf in pl])
+                b = b''.join([(doc_id << 16 | (tf & TF_MASK)).to_bytes(TUPLE_SIZE, 'big')
+                              for doc_id, tf in pl])
                 # write to file(s)
                 locs = writer.write(b)
                 # save file locations to index

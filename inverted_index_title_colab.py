@@ -36,8 +36,10 @@ class MultiFileWriter:
     def close(self):
         self._f.close()
 
+
 class MultiFileReader:
     """ Sequential binary reader of multiple files of up to BLOCK_SIZE each. """
+    
     def __init__(self):
         self._open_files = {}
 

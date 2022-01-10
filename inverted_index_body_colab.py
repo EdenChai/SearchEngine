@@ -5,6 +5,8 @@ from contextlib import closing
 from pathlib import Path
 
 BLOCK_SIZE = 1999998
+TUPLE_SIZE = 6          # We're going to pack the doc_id and tf values in this many bytes.
+TF_MASK = 2 ** 16 - 1   # Masking the 16 low bits of an integer
 
 class MultiFileWriter:
     """ Sequential binary writer to multiple files of up to BLOCK_SIZE each. """
@@ -34,6 +36,7 @@ class MultiFileWriter:
     def close(self):
         self._f.close()
 
+
 class MultiFileReader:
     """ Sequential binary reader of multiple files of up to BLOCK_SIZE each. """
     
@@ -60,8 +63,6 @@ class MultiFileReader:
         self.close()
         return False
 
-TUPLE_SIZE = 6  # We're going to pack the doc_id and tf values in this many bytes.
-TF_MASK = 2 ** 16 - 1  # Masking the 16 low bits of an integer
 
 class InvertedIndex:
     def __init__(self, docs={}):
@@ -70,6 +71,7 @@ class InvertedIndex:
         -----------
           docs: dict mapping doc_id to list of tokens
         """
+        self.dominator_mapping = Counter()
         self.df = defaultdict(list)                 # stores document frequency per term
         self.idf = defaultdict(list)                # dictionary for idf {word:idf, ...}
         self.doc_len_mapping = defaultdict(list)    # dictionary for documents length {doc_id:len, ...}

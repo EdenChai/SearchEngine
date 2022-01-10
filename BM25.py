@@ -1,12 +1,12 @@
-import math
 from collections import defaultdict
-from contextlib import closing
-
+from pathlib import Path
+import pickle
 from Reader import MultiFileReader
+from contextlib import closing
 import math
+
 TUPLE_SIZE = 6
 TF_MASK = 2 ** 16 - 1  # Masking the 16 low bits of an integer
-from contextlib import closing
 
 def read_posting_list(inverted, path, w):
     with closing(MultiFileReader(path)) as reader:
@@ -19,6 +19,13 @@ def read_posting_list(inverted, path, w):
                 tf = int.from_bytes(b[i * TUPLE_SIZE + 4:(i + 1) * TUPLE_SIZE], 'big')
                 posting_list.append((doc_id, tf))
         return posting_list
+
+def read_index(base_dir, name):
+    with open(Path(base_dir) / f'{name}.pkl', 'rb') as f:
+        return pickle.load(f)
+    
+body_idx = read_index('./body_index/', 'body_index')
+doc_len = body_idx.doc_len_mapping
 
 class BM25:
     """
@@ -52,15 +59,15 @@ class BM25:
         Inverse Document Frequency per term.
     """
 
-    def __init__(self, inverted, path,query, k1=1.5, b=0.75 ):
+    def __init__(self, inverted, path, query, k1=1.5, b=0.75 ):
 
         self.path = path
         self.query = query
         self.inverted = inverted
         self.b = b
         self.k1 = k1
-        self.N_ = len(inverted.doc_len_mapping)
-        self.avgdl_ = sum(inverted.doc_len_mapping) / len(inverted.doc_len_mapping)
+        self.N_ = len(doc_len)
+        self.avgdl_ = sum(doc_len) / len(doc_len)
         self.candidates_tf = defaultdict(list)
         self.idf_dic = defaultdict(list)
 
@@ -118,11 +125,11 @@ class BM25:
                     if tup[0] == word:
                         curr_tf = tup[1]
                         continue
-            if word in self.idf_dic:
+            if word in self.idf_dic and doc_id in doc_len:
                 if curr_tf != "":
                     score += ((self.idf_dic[word]) * curr_tf * (self.k1 + 1)) / (
                             curr_tf + self.k1 * (
-                            1 - self.b + ((self.b * self.inverted.doc_len_mapping[doc_id]) / self.avgdl_)))
+                            1 - self.b + ((self.b * doc_len[doc_id]) / self.avgdl_)))
         return score
 
     def create_tf(self):
