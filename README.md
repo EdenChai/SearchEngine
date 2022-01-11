@@ -30,3 +30,6 @@ The quality of results tested and evaluated with MAP@40, Recall, Precision measu
 * Google Colaboratory
 * Google Cloud Platform
 * VM in Compute Engine
+
+## Engine's domain
+* - http://35.202.162.205:8080/
